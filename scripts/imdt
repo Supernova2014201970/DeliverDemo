@@ -1,0 +1,56 @@
+#!/bin/bash
+# imdt — the delivery command set for the ImageMagick ARVO benchmark.
+#
+#   imdt build-before [--force]           checkout vuln,  build 3 sanitizer profiles + plain
+#   imdt build-after  [--force]           checkout fixed, build 3 sanitizer profiles + plain
+#   imdt verify-before [--no-build] [--san ...] [--report DIR]
+#   imdt verify-after  [--no-build] [--san ...] [--report DIR]
+#
+# verify-before/after build first (--no-build skips that) and then run verify.sh
+# against the hand-written reproducer; the report lands in --report (default
+# reports/before, reports/after).  --force forces a rebuild instead of reusing
+# /out.  There is no --entry: the hand driver is the only entry.
+set -uo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+. "$here/lib.sh"
+
+cmd=""; NOBUILD=0; FORCE=0; SAN_ARG="all"; REPORT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-build) NOBUILD=1; shift ;;
+    --force)    FORCE=1; shift ;;
+    --san)      SAN_ARG=${2:?}; shift 2 ;;
+    --report)   REPORT=${2:?}; shift 2 ;;
+    -h|--help)  sed -n '2,13p' "$0"; exit 0 ;;
+    -*)         die "unknown argument: $1" ;;
+    *)          [ -z "$cmd" ] || die "only one command at a time (got '$cmd' and '$1')"
+                cmd=$1; shift ;;
+  esac
+done
+[ -n "$cmd" ] || die "usage: imdt build-before|build-after|verify-before|verify-after [options]"
+
+build_tree() {
+  local tree=$1
+  local -a force=()
+  [ "$FORCE" -eq 1 ] && force+=(--force)
+  checkout_tree "$tree" || exit 1
+  "$here/build-san.sh" --tree "$tree" --san all ${force[@]+"${force[@]}"} || exit 1
+  "$here/build-plain.sh" --tree "$tree" ${force[@]+"${force[@]}"} || exit 1
+}
+
+verify_tree() {
+  local tree=$1 def_report=$2
+  if [ "$NOBUILD" -eq 0 ]; then
+    build_tree "$tree" || exit 1
+  fi
+  "$here/verify.sh" --tree "$tree" --san "$SAN_ARG" \
+    --report "${REPORT:-$def_report}"
+}
+
+case "$cmd" in
+  build-before) build_tree vuln ;;
+  build-after)  build_tree fixed ;;
+  verify-before) verify_tree vuln  reports/before ;;
+  verify-after)  verify_tree fixed reports/after ;;
+  *) die "unknown command '$cmd' (build-before|build-after|verify-before|verify-after)" ;;
+esac
